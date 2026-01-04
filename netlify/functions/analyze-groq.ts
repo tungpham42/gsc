@@ -5,6 +5,52 @@ const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY!,
 });
 
+// Define the priority list of models
+const AVAILABLE_MODELS = [
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
+  "openai/gpt-oss-safeguard-20b",
+];
+
+/**
+ * Recursive function to attempt chat completion with fallback models.
+ * It switches models only on 429 (Rate Limit) or >= 500 (Server Errors).
+ */
+async function attemptChatCompletion(
+  messages: any[],
+  modelIndex: number = 0
+): Promise<string> {
+  const currentModel = AVAILABLE_MODELS[modelIndex];
+
+  try {
+    const chatCompletion = await groq.chat.completions.create({
+      messages: messages,
+      model: currentModel,
+      response_format: { type: "json_object" },
+      temperature: 0.5,
+    });
+
+    return chatCompletion.choices[0].message.content || "{}";
+  } catch (error: any) {
+    const status = error.status || error.statusCode; // Handle various error shapes
+    const isRetryable = status === 429 || (status >= 500 && status < 600);
+    const hasNextModel = modelIndex < AVAILABLE_MODELS.length - 1;
+
+    if (isRetryable && hasNextModel) {
+      console.warn(
+        `[Groq] Model ${currentModel} failed with status ${status}. Switching to ${
+          AVAILABLE_MODELS[modelIndex + 1]
+        }...`
+      );
+      // Recursive call with the next model index
+      return attemptChatCompletion(messages, modelIndex + 1);
+    }
+
+    // If error is not retryable (e.g. 400 Bad Request) or no models left, throw it.
+    throw error;
+  }
+}
+
 export const handler: Handler = async (event) => {
   try {
     const { gscData } = JSON.parse(event.body || "{}");
@@ -31,21 +77,17 @@ export const handler: Handler = async (event) => {
       Return strictly valid JSON with a single key "insights" containing an array of 3 strings.
     `;
 
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
-      // 'llama-3.3-70b-versatile' is often better for complex reasoning than gpt-oss-120b,
-      // but you can keep your preferred model if it supports JSON mode well.
-      model: "openai/gpt-oss-120b",
-      response_format: { type: "json_object" },
-      temperature: 0.5, // Lower temperature for more analytical/consistent results
-    });
+    // Start the recursive attempt process
+    const result = await attemptChatCompletion([
+      { role: "user", content: prompt },
+    ]);
 
     return {
       statusCode: 200,
-      body: chatCompletion.choices[0].message.content || "{}",
+      body: result,
     };
   } catch (error: any) {
-    console.error("Groq Analysis Error:", error);
+    console.error("Groq Analysis Error (All models failed):", error);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: error.message }),
