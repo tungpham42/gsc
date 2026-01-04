@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   GoogleOAuthProvider,
   useGoogleLogin,
@@ -33,7 +33,7 @@ import {
 } from "@ant-design/icons";
 import axios from "axios";
 import { jwtDecode } from "jwt-decode";
-import "./App.css"; // Ensure CSS is imported
+import "./App.css";
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -54,7 +54,7 @@ interface Site {
 const themeConfig = {
   token: {
     fontFamily: "'Work Sans', sans-serif",
-    colorPrimary: "#4f46e5", // Indigo
+    colorPrimary: "#4f46e5",
     colorSuccess: "#10b981",
     borderRadius: 12,
     boxShadowSecondary: "0 4px 12px rgba(0,0,0,0.08)",
@@ -62,15 +62,58 @@ const themeConfig = {
 };
 
 const Dashboard = () => {
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [tokens, setTokens] = useState<any>(null);
-  const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<string | null>(null);
+  // --- STATE WITH PERSISTENCE ---
+
+  // 1. Initialize State from LocalStorage if available
+  const [user, setUser] = useState<UserProfile | null>(() => {
+    const saved = localStorage.getItem("gsc_user");
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const [tokens, setTokens] = useState<any>(() => {
+    const saved = localStorage.getItem("gsc_tokens");
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const [sites, setSites] = useState<Site[]>(() => {
+    const saved = localStorage.getItem("gsc_sites");
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [selectedSite, setSelectedSite] = useState<string | null>(() => {
+    return localStorage.getItem("gsc_selectedSite");
+  });
+
   const [gscData, setGscData] = useState<any[]>([]);
   const [insights, setInsights] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // --- PERSISTENCE EFFECTS ---
+
+  // 2. Save to LocalStorage whenever state changes
+  useEffect(() => {
+    if (user) localStorage.setItem("gsc_user", JSON.stringify(user));
+    else localStorage.removeItem("gsc_user");
+  }, [user]);
+
+  useEffect(() => {
+    if (tokens) localStorage.setItem("gsc_tokens", JSON.stringify(tokens));
+    else localStorage.removeItem("gsc_tokens");
+  }, [tokens]);
+
+  useEffect(() => {
+    if (sites.length > 0)
+      localStorage.setItem("gsc_sites", JSON.stringify(sites));
+    else localStorage.removeItem("gsc_sites");
+  }, [sites]);
+
+  useEffect(() => {
+    if (selectedSite) localStorage.setItem("gsc_selectedSite", selectedSite);
+    else localStorage.removeItem("gsc_selectedSite");
+  }, [selectedSite]);
+
   // --- LOGIN LOGIC ---
+
   useGoogleOneTapLogin({
     onSuccess: (credentialResponse) => {
       if (credentialResponse.credential) {
@@ -83,7 +126,7 @@ const Dashboard = () => {
       }
     },
     onError: () => console.log("One Tap closed"),
-    disabled: !!user,
+    disabled: !!user, // Don't show if already logged in (even from storage)
   });
 
   const linkSearchConsole = useGoogleLogin({
@@ -115,14 +158,16 @@ const Dashboard = () => {
 
     try {
       const res = await axios.post("/.netlify/functions/fetch-gsc-data", {
-        tokens: tokens,
+        tokens: tokens, // Uses the persisted tokens
         siteUrl: siteUrl,
       });
       const rows = res.data.data;
       setGscData(rows || []);
       if (rows && rows.length > 0) analyzeData(rows);
     } catch (error) {
-      message.error("Could not fetch data");
+      console.error(error);
+      // Optional: If token is expired (401), you might want to auto-logout here
+      message.error("Could not fetch data. Token may be expired.");
     } finally {
       setLoading(false);
     }
@@ -141,12 +186,19 @@ const Dashboard = () => {
 
   const handleLogout = () => {
     googleLogout();
+    // Reset State
     setUser(null);
     setSites([]);
     setGscData([]);
     setInsights([]);
     setTokens(null);
     setSelectedSite(null);
+
+    // Clear Storage explicitly (Redundant due to useEffects, but safer)
+    localStorage.removeItem("gsc_user");
+    localStorage.removeItem("gsc_tokens");
+    localStorage.removeItem("gsc_sites");
+    localStorage.removeItem("gsc_selectedSite");
   };
 
   // --- TABLE COLUMNS ---
@@ -375,6 +427,7 @@ const Dashboard = () => {
               </Row>
             </Card>
 
+            {/* If data exists, show tables. If just loaded from storage with no site selected, show nothing/prompt */}
             {gscData.length > 0 && (
               <Row gutter={[24, 24]}>
                 {/* AI Insights Sidebar/Top Section */}
