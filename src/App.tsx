@@ -16,21 +16,29 @@ import {
   Avatar,
   Space,
   Select,
+  ConfigProvider,
+  Tag,
+  Statistic,
+  Row,
+  Col,
 } from "antd";
 import {
   GoogleOutlined,
   RobotOutlined,
   SearchOutlined,
-  LogoutOutlined,
   ThunderboltFilled,
   GlobalOutlined,
+  ArrowRightOutlined,
+  RiseOutlined,
 } from "@ant-design/icons";
 import axios from "axios";
 import { jwtDecode } from "jwt-decode";
+import "./App.css"; // Ensure CSS is imported
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
+// --- TYPES ---
 interface UserProfile {
   name: string;
   email: string;
@@ -42,49 +50,55 @@ interface Site {
   permissionLevel: string;
 }
 
+// --- THEME CONFIGURATION ---
+const themeConfig = {
+  token: {
+    fontFamily: "'Work Sans', sans-serif",
+    colorPrimary: "#4f46e5", // Indigo
+    colorSuccess: "#10b981",
+    borderRadius: 12,
+    boxShadowSecondary: "0 4px 12px rgba(0,0,0,0.08)",
+  },
+};
+
 const Dashboard = () => {
   const [user, setUser] = useState<UserProfile | null>(null);
-
-  // New States for Site Selection
   const [tokens, setTokens] = useState<any>(null);
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSite, setSelectedSite] = useState<string | null>(null);
-
   const [gscData, setGscData] = useState<any[]>([]);
   const [insights, setInsights] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // 1. ONE TAP LOGIN
+  // --- LOGIN LOGIC ---
   useGoogleOneTapLogin({
     onSuccess: (credentialResponse) => {
       if (credentialResponse.credential) {
         const decoded = jwtDecode<UserProfile>(credentialResponse.credential);
         setUser(decoded);
-        message.success(`Welcome back, ${decoded.name}!`);
+        message.success({
+          content: `Welcome back, ${decoded.name}!`,
+          icon: <ThunderboltFilled style={{ color: "#4f46e5" }} />,
+        });
       }
     },
-    onError: () => {
-      console.log("One Tap closed or failed");
-    },
+    onError: () => console.log("One Tap closed"),
     disabled: !!user,
   });
 
-  // 2. AUTHORIZATION & LIST SITES
   const linkSearchConsole = useGoogleLogin({
     onSuccess: async (codeResponse) => {
       setLoading(true);
       try {
-        // Step A: Send Code to Backend -> Get Tokens & Site List
         const res = await axios.post("/.netlify/functions/fetch-gsc-data", {
           code: codeResponse.code,
         });
-
-        setTokens(res.data.tokens); // Save tokens for next step
-        setSites(res.data.sites); // Save sites to display
-        message.success("Connected! Please select a website.");
+        setTokens(res.data.tokens);
+        setSites(res.data.sites);
+        message.success("Search Console Connected");
       } catch (error) {
         console.error(error);
-        message.error("Failed to connect Search Console");
+        message.error("Connection failed");
       } finally {
         setLoading(false);
       }
@@ -93,7 +107,6 @@ const Dashboard = () => {
     scope: "https://www.googleapis.com/auth/webmasters.readonly",
   });
 
-  // 3. FETCH DATA (After Site Selection)
   const handleSiteSelect = async (siteUrl: string) => {
     setSelectedSite(siteUrl);
     setLoading(true);
@@ -101,25 +114,15 @@ const Dashboard = () => {
     setInsights([]);
 
     try {
-      // Step B: Send Tokens + Selected Site -> Get Data
       const res = await axios.post("/.netlify/functions/fetch-gsc-data", {
         tokens: tokens,
         siteUrl: siteUrl,
       });
-
       const rows = res.data.data;
-      setGscData(rows);
-
-      // Trigger AI Analysis automatically
-      if (rows && rows.length > 0) {
-        analyzeData(rows);
-      } else {
-        message.info(
-          "No traffic data found for this site in the last 30 days."
-        );
-      }
+      setGscData(rows || []);
+      if (rows && rows.length > 0) analyzeData(rows);
     } catch (error) {
-      message.error("Failed to fetch site data");
+      message.error("Could not fetch data");
     } finally {
       setLoading(false);
     }
@@ -132,7 +135,7 @@ const Dashboard = () => {
       });
       setInsights(res.data.insights);
     } catch (error) {
-      message.warning("AI Analysis could not complete");
+      message.warning("AI Analysis busy. Try again.");
     }
   };
 
@@ -146,19 +149,33 @@ const Dashboard = () => {
     setSelectedSite(null);
   };
 
+  // --- TABLE COLUMNS ---
   const columns = [
-    { title: "Query", dataIndex: "keys", render: (k: any) => k[0] },
+    {
+      title: "Query",
+      dataIndex: "keys",
+      render: (k: any) => (
+        <Text strong style={{ color: "#334155" }}>
+          {k[0]}
+        </Text>
+      ),
+    },
     {
       title: "Clicks",
       dataIndex: "clicks",
       sorter: (a: any, b: any) => a.clicks - b.clicks,
+      render: (val: number) => <Tag color="blue">{val.toLocaleString()}</Tag>,
     },
-    { title: "Impressions", dataIndex: "impressions" },
+    {
+      title: "Impressions",
+      dataIndex: "impressions",
+      render: (val: number) => val.toLocaleString(),
+    },
     {
       title: "CTR",
       dataIndex: "ctr",
       render: (v: number) => (
-        <Text type={v < 0.05 ? "danger" : "success"}>
+        <Text type={v < 0.05 ? "secondary" : "success"} strong>
           {(v * 100).toFixed(2)}%
         </Text>
       ),
@@ -166,157 +183,275 @@ const Dashboard = () => {
     {
       title: "Position",
       dataIndex: "position",
-      render: (v: number) => v.toFixed(1),
+      render: (v: number) => <Text mark>{v.toFixed(1)}</Text>,
     },
   ];
 
   return (
-    <Layout style={{ minHeight: "100vh", background: "#f0f2f5" }}>
+    <Layout className="hero-background">
+      {/* HEADER */}
       <Header
         style={{
+          background: "rgba(255, 255, 255, 0.8)",
+          backdropFilter: "blur(10px)",
+          borderBottom: "1px solid #f1f5f9",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          background: "#001529",
-          padding: "0 24px",
+          padding: "0 40px",
+          position: "sticky",
+          top: 0,
+          zIndex: 1000,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center" }}>
-          <SearchOutlined
-            style={{ marginRight: 8, fontSize: 20, color: "white" }}
-          />
-          <Title level={4} style={{ color: "white", margin: 0 }}>
-            SEO Analyzer
-          </Title>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div
+            style={{
+              background: "#4f46e5",
+              borderRadius: 8,
+              width: 32,
+              height: 32,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <SearchOutlined style={{ color: "white", fontSize: 18 }} />
+          </div>
+          <Text strong style={{ fontSize: 20, letterSpacing: "-0.5px" }}>
+            SEO<span style={{ color: "#4f46e5" }}>Analyzer</span>
+          </Text>
         </div>
+
         {user && (
           <Space>
-            <Avatar src={user.picture} />
-            <Text style={{ color: "white" }}>{user.name}</Text>
+            <Avatar
+              src={user.picture}
+              style={{
+                border: "2px solid white",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+              }}
+            />
             <Button
               type="text"
-              icon={<LogoutOutlined />}
               onClick={handleLogout}
-              style={{ color: "#ff4d4f" }}
-            />
+              danger
+              style={{ fontWeight: 500 }}
+            >
+              Sign Out
+            </Button>
           </Space>
         )}
       </Header>
 
       <Content
         style={{
-          padding: "40px",
+          padding: "60px 20px",
           maxWidth: 1200,
           margin: "0 auto",
           width: "100%",
         }}
       >
-        {/* State 1: Not Logged In */}
+        {/* VIEW 1: LANDING / LOGIN */}
         {!user && (
-          <Card style={{ textAlign: "center", padding: 60 }}>
-            <Title level={2}>Analyze your Google Search Performance</Title>
-            <Paragraph type="secondary">
-              Sign in with Google to start.
-            </Paragraph>
-            <Spin tip="Waiting for One Tap..." />
-          </Card>
-        )}
-
-        {/* State 2: Logged In, No Access Token Yet */}
-        {user && !tokens && (
-          <Card style={{ textAlign: "center", padding: 60 }}>
-            <Title level={3}>Welcome, {user.name}</Title>
-            <Paragraph>
-              We need permission to list your websites from Search Console.
-            </Paragraph>
-            <Button
-              type="primary"
-              size="large"
-              icon={<GoogleOutlined />}
-              onClick={() => linkSearchConsole()}
-              loading={loading}
+          <div style={{ textAlign: "center", marginTop: 80 }}>
+            <Title style={{ fontSize: 64, marginBottom: 20, fontWeight: 800 }}>
+              Unlock Your Search Traffic.
+            </Title>
+            <Paragraph
+              style={{
+                fontSize: 20,
+                color: "#64748b",
+                maxWidth: 600,
+                margin: "0 auto 40px",
+              }}
             >
-              Connect Search Console
-            </Button>
-          </Card>
+              Connect your Google Search Console to get instant, AI-powered
+              insights on your top performing queries and missed opportunities.
+            </Paragraph>
+            <Space size="middle">
+              <Button
+                type="primary"
+                size="large"
+                style={{ height: 56, padding: "0 40px", fontSize: 18 }}
+                disabled
+              >
+                Use One Tap to Sign In
+              </Button>
+            </Space>
+          </div>
         )}
 
-        {/* State 3: Token Received, Select Site */}
+        {/* VIEW 2: LOGGED IN - SETUP */}
+        {user && !tokens && (
+          <Row justify="center">
+            <Col xs={24} md={12}>
+              <Card
+                className="custom-card"
+                style={{ textAlign: "center", padding: 40 }}
+              >
+                <Avatar
+                  size={80}
+                  src={user.picture}
+                  style={{ marginBottom: 20 }}
+                />
+                <Title level={3}>Welcome, {user.name}</Title>
+                <Paragraph type="secondary" style={{ marginBottom: 30 }}>
+                  To start analyzing, we need read-access to your Search Console
+                  properties.
+                </Paragraph>
+                <Button
+                  type="primary"
+                  size="large"
+                  icon={<GoogleOutlined />}
+                  onClick={() => linkSearchConsole()}
+                  loading={loading}
+                  style={{ height: 50, padding: "0 30px" }}
+                >
+                  Connect Search Console Data
+                </Button>
+              </Card>
+            </Col>
+          </Row>
+        )}
+
+        {/* VIEW 3: DASHBOARD */}
         {user && tokens && (
           <Space direction="vertical" size="large" style={{ width: "100%" }}>
-            {/* Site Selector Card */}
-            <Card>
-              <Space
-                size="large"
-                style={{ width: "100%", justifyContent: "space-between" }}
-              >
-                <Space>
-                  <GlobalOutlined style={{ fontSize: 20, color: "#1890ff" }} />
-                  <Text strong style={{ fontSize: 16 }}>
-                    Select Website:
-                  </Text>
-                  <Select
-                    style={{ width: 300 }}
-                    placeholder="Choose a property..."
-                    onChange={handleSiteSelect}
-                    value={selectedSite}
-                    loading={loading}
-                    options={sites.map((site) => ({
-                      label: site.siteUrl,
-                      value: site.siteUrl,
-                    }))}
-                  />
-                </Space>
-                {loading && <Spin />}
-              </Space>
+            {/* Control Bar */}
+            <Card className="custom-card" bodyStyle={{ padding: "24px 32px" }}>
+              <Row align="middle" justify="space-between" gutter={[16, 16]}>
+                <Col>
+                  <Space>
+                    <GlobalOutlined
+                      style={{ fontSize: 24, color: "#4f46e5" }}
+                    />
+                    <div>
+                      <Text
+                        type="secondary"
+                        style={{ fontSize: 12, display: "block" }}
+                      >
+                        ACTIVE PROPERTY
+                      </Text>
+                      <Select
+                        showSearch
+                        style={{ width: 350, fontWeight: 600 }}
+                        bordered={false}
+                        placeholder="Select a domain to analyze..."
+                        optionFilterProp="label"
+                        onChange={handleSiteSelect}
+                        value={selectedSite}
+                        loading={loading}
+                        options={sites.map((s) => ({
+                          label: s.siteUrl,
+                          value: s.siteUrl,
+                        }))}
+                        suffixIcon={<ArrowRightOutlined />}
+                      />
+                    </div>
+                  </Space>
+                </Col>
+                {/* Stats Summary (Placeholder logic) */}
+                <Col>
+                  <Space size="large">
+                    {gscData.length > 0 && (
+                      <>
+                        <Statistic
+                          title="Total Clicks"
+                          value={gscData.reduce((a, b) => a + b.clicks, 0)}
+                          prefix={<RiseOutlined />}
+                          valueStyle={{ fontSize: 20, fontWeight: 600 }}
+                        />
+                        <Statistic
+                          title="Queries"
+                          value={gscData.length}
+                          prefix={<SearchOutlined />}
+                          valueStyle={{ fontSize: 20, fontWeight: 600 }}
+                        />
+                      </>
+                    )}
+                  </Space>
+                </Col>
+              </Row>
             </Card>
 
-            {/* Dashboard Data */}
             {gscData.length > 0 && (
-              <>
-                <Card
-                  title={
-                    <Space>
-                      <RobotOutlined style={{ color: "#1890ff" }} />
-                      AI Insights
-                    </Space>
-                  }
-                  style={{ borderTop: "4px solid #1890ff" }}
-                >
-                  {insights.length > 0 ? (
-                    <ul style={{ paddingLeft: 20, margin: 0 }}>
-                      {insights.map((item, idx) => (
-                        <li key={idx} style={{ marginBottom: 8, fontSize: 16 }}>
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div style={{ textAlign: "center", padding: 20 }}>
-                      <Spin
-                        indicator={
-                          <ThunderboltFilled style={{ fontSize: 24 }} spin />
-                        }
-                      />
-                      <div style={{ marginTop: 10 }}>
-                        Analyzing SEO Strategy...
+              <Row gutter={[24, 24]}>
+                {/* AI Insights Sidebar/Top Section */}
+                <Col xs={24} lg={insights.length > 0 ? 8 : 24}>
+                  <Card
+                    className="custom-card ai-card"
+                    title={
+                      <Space>
+                        <RobotOutlined />
+                        AI Strategy
+                      </Space>
+                    }
+                    loading={insights.length === 0}
+                  >
+                    {insights.length > 0 ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 16,
+                        }}
+                      >
+                        {insights.map((insight, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              background: "rgba(255,255,255,0.1)",
+                              padding: 16,
+                              borderRadius: 8,
+                            }}
+                          >
+                            <Text style={{ color: "white", fontSize: 15 }}>
+                              {insight}
+                            </Text>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                  )}
-                </Card>
+                    ) : (
+                      <div
+                        style={{
+                          textAlign: "center",
+                          padding: 20,
+                          color: "white",
+                        }}
+                      >
+                        <Spin
+                          indicator={
+                            <ThunderboltFilled
+                              style={{ fontSize: 30, color: "white" }}
+                              spin
+                            />
+                          }
+                        />
+                        <div style={{ marginTop: 15 }}>
+                          Analysing patterns...
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+                </Col>
 
-                <Card
-                  title="Top Performing Queries"
-                  extra={<Text type="secondary">Last 30 Days</Text>}
-                >
-                  <Table
-                    dataSource={gscData}
-                    columns={columns}
-                    rowKey={(r) => r.keys[0]}
-                    pagination={{ pageSize: 5 }}
-                  />
-                </Card>
-              </>
+                {/* Data Table */}
+                <Col xs={24} lg={insights.length > 0 ? 16 : 24}>
+                  <Card
+                    className="custom-card"
+                    title="Top Performing Queries"
+                    extra={<Tag color="blue">Last 30 Days</Tag>}
+                  >
+                    <Table
+                      dataSource={gscData}
+                      columns={columns}
+                      rowKey={(r) => r.keys[0]}
+                      pagination={{ pageSize: 6 }}
+                    />
+                  </Card>
+                </Col>
+              </Row>
             )}
           </Space>
         )}
@@ -327,8 +462,10 @@ const Dashboard = () => {
 
 export default function App() {
   return (
-    <GoogleOAuthProvider clientId={process.env.REACT_APP_GOOGLE_CLIENT_ID!}>
-      <Dashboard />
-    </GoogleOAuthProvider>
+    <ConfigProvider theme={themeConfig}>
+      <GoogleOAuthProvider clientId={process.env.REACT_APP_GOOGLE_CLIENT_ID!}>
+        <Dashboard />
+      </GoogleOAuthProvider>
+    </ConfigProvider>
   );
 }
