@@ -64,7 +64,7 @@ const themeConfig = {
 const Dashboard = () => {
   // --- STATE WITH PERSISTENCE ---
 
-  // 1. Initialize State from LocalStorage if available
+  // 1. User & Auth
   const [user, setUser] = useState<UserProfile | null>(() => {
     const saved = localStorage.getItem("gsc_user");
     return saved ? JSON.parse(saved) : null;
@@ -75,6 +75,7 @@ const Dashboard = () => {
     return saved ? JSON.parse(saved) : null;
   });
 
+  // 2. Site Selection
   const [sites, setSites] = useState<Site[]>(() => {
     const saved = localStorage.getItem("gsc_sites");
     return saved ? JSON.parse(saved) : [];
@@ -84,13 +85,21 @@ const Dashboard = () => {
     return localStorage.getItem("gsc_selectedSite");
   });
 
-  const [gscData, setGscData] = useState<any[]>([]);
-  const [insights, setInsights] = useState<string[]>([]);
+  // 3. Data & Insights (Persisted now)
+  const [gscData, setGscData] = useState<any[]>(() => {
+    const saved = localStorage.getItem("gsc_data");
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [insights, setInsights] = useState<string[]>(() => {
+    const saved = localStorage.getItem("gsc_insights");
+    return saved ? JSON.parse(saved) : [];
+  });
+
   const [loading, setLoading] = useState(false);
 
   // --- PERSISTENCE EFFECTS ---
 
-  // 2. Save to LocalStorage whenever state changes
   useEffect(() => {
     if (user) localStorage.setItem("gsc_user", JSON.stringify(user));
     else localStorage.removeItem("gsc_user");
@@ -112,6 +121,24 @@ const Dashboard = () => {
     else localStorage.removeItem("gsc_selectedSite");
   }, [selectedSite]);
 
+  // NEW: Persist Data & Insights
+  useEffect(() => {
+    if (gscData.length > 0)
+      localStorage.setItem("gsc_data", JSON.stringify(gscData));
+    else if (gscData.length === 0 && !selectedSite) {
+      // Only clear if no site is selected, prevents clearing during loading states
+      localStorage.removeItem("gsc_data");
+    }
+  }, [gscData, selectedSite]);
+
+  useEffect(() => {
+    if (insights.length > 0)
+      localStorage.setItem("gsc_insights", JSON.stringify(insights));
+    else if (insights.length === 0 && !selectedSite) {
+      localStorage.removeItem("gsc_insights");
+    }
+  }, [insights, selectedSite]);
+
   // --- LOGIN LOGIC ---
 
   useGoogleOneTapLogin({
@@ -126,7 +153,7 @@ const Dashboard = () => {
       }
     },
     onError: () => console.log("One Tap closed"),
-    disabled: !!user, // Don't show if already logged in (even from storage)
+    disabled: !!user,
   });
 
   const linkSearchConsole = useGoogleLogin({
@@ -153,21 +180,28 @@ const Dashboard = () => {
   const handleSiteSelect = async (siteUrl: string) => {
     setSelectedSite(siteUrl);
     setLoading(true);
+
+    // Clear previous data while fetching new to avoid confusion
     setGscData([]);
     setInsights([]);
 
     try {
       const res = await axios.post("/.netlify/functions/fetch-gsc-data", {
-        tokens: tokens, // Uses the persisted tokens
+        tokens: tokens,
         siteUrl: siteUrl,
       });
       const rows = res.data.data;
       setGscData(rows || []);
-      if (rows && rows.length > 0) analyzeData(rows);
+
+      // Save immediatley to state (triggers useEffect persistence)
+      if (rows && rows.length > 0) {
+        analyzeData(rows);
+      } else {
+        message.info("No data found for this period.");
+      }
     } catch (error) {
       console.error(error);
-      // Optional: If token is expired (401), you might want to auto-logout here
-      message.error("Could not fetch data. Token may be expired.");
+      message.error("Could not fetch data.");
     } finally {
       setLoading(false);
     }
@@ -186,7 +220,8 @@ const Dashboard = () => {
 
   const handleLogout = () => {
     googleLogout();
-    // Reset State
+
+    // 1. Reset State
     setUser(null);
     setSites([]);
     setGscData([]);
@@ -194,11 +229,13 @@ const Dashboard = () => {
     setTokens(null);
     setSelectedSite(null);
 
-    // Clear Storage explicitly (Redundant due to useEffects, but safer)
+    // 2. Clear All Local Storage
     localStorage.removeItem("gsc_user");
     localStorage.removeItem("gsc_tokens");
     localStorage.removeItem("gsc_sites");
     localStorage.removeItem("gsc_selectedSite");
+    localStorage.removeItem("gsc_data"); // Clear data
+    localStorage.removeItem("gsc_insights"); // Clear insights
   };
 
   // --- TABLE COLUMNS ---
@@ -403,7 +440,7 @@ const Dashboard = () => {
                     </div>
                   </Space>
                 </Col>
-                {/* Stats Summary (Placeholder logic) */}
+                {/* Stats Summary */}
                 <Col>
                   <Space size="large">
                     {gscData.length > 0 && (
@@ -427,7 +464,7 @@ const Dashboard = () => {
               </Row>
             </Card>
 
-            {/* If data exists, show tables. If just loaded from storage with no site selected, show nothing/prompt */}
+            {/* Display persisted data if available */}
             {gscData.length > 0 && (
               <Row gutter={[24, 24]}>
                 {/* AI Insights Sidebar/Top Section */}
@@ -440,7 +477,8 @@ const Dashboard = () => {
                         AI Strategy
                       </Space>
                     }
-                    loading={insights.length === 0}
+                    // Only show loading if we have no insights AND we are actively loading
+                    loading={loading && insights.length === 0}
                   >
                     {insights.length > 0 ? (
                       <div
@@ -473,6 +511,7 @@ const Dashboard = () => {
                           color: "white",
                         }}
                       >
+                        {/* Fallback if no insights yet */}
                         <Spin
                           indicator={
                             <ThunderboltFilled
