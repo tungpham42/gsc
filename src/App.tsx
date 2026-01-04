@@ -1,241 +1,324 @@
-// src/App.tsx
-import React, { useState, useEffect } from "react"; // Thêm useEffect
-import { GoogleOAuthProvider, useGoogleLogin } from "@react-oauth/google";
+import React, { useState } from "react";
+import {
+  GoogleOAuthProvider,
+  useGoogleLogin,
+  useGoogleOneTapLogin,
+  googleLogout,
+} from "@react-oauth/google";
 import {
   Button,
   Layout,
-  Card,
   Table,
+  Card,
   Typography,
   Spin,
-  // Input, // Xoá Input cũ
-  Select, // Thêm Select
   message,
-  Row,
-  Col,
+  Avatar,
+  Space,
+  Select,
 } from "antd";
 import {
-  RobotOutlined,
   GoogleOutlined,
-  // SearchOutlined, // Có thể bỏ nếu không dùng icon trong Select
+  RobotOutlined,
+  SearchOutlined,
+  LogoutOutlined,
+  ThunderboltFilled,
+  GlobalOutlined,
 } from "@ant-design/icons";
 import axios from "axios";
-import ReactMarkdown from "react-markdown";
+import { jwtDecode } from "jwt-decode";
 
 const { Header, Content } = Layout;
-const { Title, Text } = Typography;
-const { Option } = Select; // Lấy Option từ Select
+const { Title, Text, Paragraph } = Typography;
 
-// Client ID của bạn
-const GOOGLE_CLIENT_ID =
-  "736527399714-uoqjoki4u564c739pcpnmbd7f8gpc0s5.apps.googleusercontent.com";
+interface UserProfile {
+  name: string;
+  email: string;
+  picture: string;
+}
 
-const SEODashboard = () => {
-  const [token, setToken] = useState<string | null>(null);
-  const [siteUrl, setSiteUrl] = useState<string>("");
-  const [sites, setSites] = useState<any[]>([]); // State lưu danh sách site
-  const [loadingSites, setLoadingSites] = useState(false); // Loading cho dropdown
-  const [loading, setLoading] = useState(false); // Loading cho nút Analyze
-  const [data, setData] = useState<any>(null);
+interface Site {
+  siteUrl: string;
+  permissionLevel: string;
+}
 
-  const login = useGoogleLogin({
-    onSuccess: (tokenResponse) => setToken(tokenResponse.access_token),
+const Dashboard = () => {
+  const [user, setUser] = useState<UserProfile | null>(null);
+
+  // New States for Site Selection
+  const [tokens, setTokens] = useState<any>(null);
+  const [sites, setSites] = useState<Site[]>([]);
+  const [selectedSite, setSelectedSite] = useState<string | null>(null);
+
+  const [gscData, setGscData] = useState<any[]>([]);
+  const [insights, setInsights] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // 1. ONE TAP LOGIN
+  useGoogleOneTapLogin({
+    onSuccess: (credentialResponse) => {
+      if (credentialResponse.credential) {
+        const decoded = jwtDecode<UserProfile>(credentialResponse.credential);
+        setUser(decoded);
+        message.success(`Welcome back, ${decoded.name}!`);
+      }
+    },
+    onError: () => {
+      console.log("One Tap closed or failed");
+    },
+    disabled: !!user,
+  });
+
+  // 2. AUTHORIZATION & LIST SITES
+  const linkSearchConsole = useGoogleLogin({
+    onSuccess: async (codeResponse) => {
+      setLoading(true);
+      try {
+        // Step A: Send Code to Backend -> Get Tokens & Site List
+        const res = await axios.post("/.netlify/functions/fetch-gsc-data", {
+          code: codeResponse.code,
+        });
+
+        setTokens(res.data.tokens); // Save tokens for next step
+        setSites(res.data.sites); // Save sites to display
+        message.success("Connected! Please select a website.");
+      } catch (error) {
+        console.error(error);
+        message.error("Failed to connect Search Console");
+      } finally {
+        setLoading(false);
+      }
+    },
+    flow: "auth-code",
     scope: "https://www.googleapis.com/auth/webmasters.readonly",
   });
 
-  // Effect: Tự động lấy danh sách site khi có token
-  useEffect(() => {
-    if (token) {
-      fetchSites();
-    }
-  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 3. FETCH DATA (After Site Selection)
+  const handleSiteSelect = async (siteUrl: string) => {
+    setSelectedSite(siteUrl);
+    setLoading(true);
+    setGscData([]);
+    setInsights([]);
 
-  const fetchSites = async () => {
-    setLoadingSites(true);
     try {
-      const res = await axios.post("/.netlify/functions/list-sites", {
-        accessToken: token,
+      // Step B: Send Tokens + Selected Site -> Get Data
+      const res = await axios.post("/.netlify/functions/fetch-gsc-data", {
+        tokens: tokens,
+        siteUrl: siteUrl,
       });
-      setSites(res.data);
-      // Tự chọn site đầu tiên nếu có để tiện cho user
-      if (res.data && res.data.length > 0) {
-        setSiteUrl(res.data[0].siteUrl);
+
+      const rows = res.data.data;
+      setGscData(rows);
+
+      // Trigger AI Analysis automatically
+      if (rows && rows.length > 0) {
+        analyzeData(rows);
+      } else {
+        message.info(
+          "No traffic data found for this site in the last 30 days."
+        );
       }
     } catch (error) {
-      console.error(error);
-      message.error("Không thể lấy danh sách website.");
-    } finally {
-      setLoadingSites(false);
-    }
-  };
-
-  const handleAnalyze = async () => {
-    if (!siteUrl) return message.error("Vui lòng chọn một Website");
-
-    setLoading(true);
-    try {
-      const response = await axios.post("/.netlify/functions/analyze-seo", {
-        accessToken: token,
-        siteUrl: siteUrl,
-        startDate: "2023-11-01",
-        endDate: "2023-12-01",
-      });
-      setData(response.data);
-      message.success("Phân tích hoàn tất!");
-    } catch (error) {
-      console.error(error);
-      message.error("Lỗi khi phân tích dữ liệu.");
+      message.error("Failed to fetch site data");
     } finally {
       setLoading(false);
     }
   };
 
-  // ... (Giữ nguyên columns và phần login UI cũ) ...
+  const analyzeData = async (data: any[]) => {
+    try {
+      const res = await axios.post("/.netlify/functions/analyze-groq", {
+        gscData: data,
+      });
+      setInsights(res.data.insights);
+    } catch (error) {
+      message.warning("AI Analysis could not complete");
+    }
+  };
+
+  const handleLogout = () => {
+    googleLogout();
+    setUser(null);
+    setSites([]);
+    setGscData([]);
+    setInsights([]);
+    setTokens(null);
+    setSelectedSite(null);
+  };
+
   const columns = [
-    {
-      title: "Keyword",
-      dataIndex: "keys",
-      key: "keys",
-      render: (k: any) => k[0],
-    },
+    { title: "Query", dataIndex: "keys", render: (k: any) => k[0] },
     {
       title: "Clicks",
       dataIndex: "clicks",
-      key: "clicks",
       sorter: (a: any, b: any) => a.clicks - b.clicks,
     },
-    {
-      title: "Impressions",
-      dataIndex: "impressions",
-      key: "impressions",
-      sorter: (a: any, b: any) => a.impressions - b.impressions,
-    },
+    { title: "Impressions", dataIndex: "impressions" },
     {
       title: "CTR",
       dataIndex: "ctr",
-      key: "ctr",
-      render: (v: number) => `${(v * 100).toFixed(2)}%`,
+      render: (v: number) => (
+        <Text type={v < 0.05 ? "danger" : "success"}>
+          {(v * 100).toFixed(2)}%
+        </Text>
+      ),
     },
     {
       title: "Position",
       dataIndex: "position",
-      key: "position",
       render: (v: number) => v.toFixed(1),
     },
   ];
 
   return (
     <Layout style={{ minHeight: "100vh", background: "#f0f2f5" }}>
-      {/* ... (Header giữ nguyên) ... */}
       <Header
         style={{
-          background: "#fff",
-          padding: "0 20px",
           display: "flex",
+          justifyContent: "space-between",
           alignItems: "center",
+          background: "#001529",
+          padding: "0 24px",
         }}
       >
-        <RobotOutlined
-          style={{ fontSize: "24px", color: "#1890ff", marginRight: 10 }}
-        />
-        <Title level={4} style={{ margin: 0 }}>
-          GSC + Groq Analyzer
-        </Title>
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <SearchOutlined
+            style={{ marginRight: 8, fontSize: 20, color: "white" }}
+          />
+          <Title level={4} style={{ color: "white", margin: 0 }}>
+            SEO Analyzer
+          </Title>
+        </div>
+        {user && (
+          <Space>
+            <Avatar src={user.picture} />
+            <Text style={{ color: "white" }}>{user.name}</Text>
+            <Button
+              type="text"
+              icon={<LogoutOutlined />}
+              onClick={handleLogout}
+              style={{ color: "#ff4d4f" }}
+            />
+          </Space>
+        )}
       </Header>
 
       <Content
         style={{
-          padding: "20px",
-          maxWidth: "1200px",
+          padding: "40px",
+          maxWidth: 1200,
           margin: "0 auto",
           width: "100%",
         }}
       >
-        {!token ? (
-          // ... (Phần Login giữ nguyên) ...
-          <Card style={{ textAlign: "center", marginTop: 100 }}>
-            <Title level={3}>Chào mừng bạn</Title>
-            <Text>
-              Đăng nhập Google để AI phân tích Search Console của bạn.
-            </Text>
-            <br />
-            <br />
+        {/* State 1: Not Logged In */}
+        {!user && (
+          <Card style={{ textAlign: "center", padding: 60 }}>
+            <Title level={2}>Analyze your Google Search Performance</Title>
+            <Paragraph type="secondary">
+              Sign in with Google to start.
+            </Paragraph>
+            <Spin tip="Waiting for One Tap..." />
+          </Card>
+        )}
+
+        {/* State 2: Logged In, No Access Token Yet */}
+        {user && !tokens && (
+          <Card style={{ textAlign: "center", padding: 60 }}>
+            <Title level={3}>Welcome, {user.name}</Title>
+            <Paragraph>
+              We need permission to list your websites from Search Console.
+            </Paragraph>
             <Button
               type="primary"
-              icon={<GoogleOutlined />}
-              onClick={() => login()}
               size="large"
+              icon={<GoogleOutlined />}
+              onClick={() => linkSearchConsole()}
+              loading={loading}
             >
-              Sign in with Google
+              Connect Search Console
             </Button>
           </Card>
-        ) : (
-          <>
-            <Card style={{ marginBottom: 20 }}>
-              <Row gutter={16} align="middle">
-                <Col span={12}>
-                  {/* Thay Input bằng Select */}
+        )}
+
+        {/* State 3: Token Received, Select Site */}
+        {user && tokens && (
+          <Space direction="vertical" size="large" style={{ width: "100%" }}>
+            {/* Site Selector Card */}
+            <Card>
+              <Space
+                size="large"
+                style={{ width: "100%", justifyContent: "space-between" }}
+              >
+                <Space>
+                  <GlobalOutlined style={{ fontSize: 20, color: "#1890ff" }} />
+                  <Text strong style={{ fontSize: 16 }}>
+                    Select Website:
+                  </Text>
                   <Select
-                    style={{ width: "100%" }}
-                    placeholder="Chọn Website cần phân tích"
-                    value={siteUrl}
-                    onChange={(value) => setSiteUrl(value)}
-                    loading={loadingSites}
-                    showSearch
-                    optionFilterProp="children"
-                  >
-                    {sites.map((site) => (
-                      <Option key={site.siteUrl} value={site.siteUrl}>
-                        {site.siteUrl} ({site.permissionLevel})
-                      </Option>
-                    ))}
-                  </Select>
-                </Col>
-                <Col span={12}>
-                  <Button
-                    type="primary"
-                    onClick={handleAnalyze}
+                    style={{ width: 300 }}
+                    placeholder="Choose a property..."
+                    onChange={handleSiteSelect}
+                    value={selectedSite}
                     loading={loading}
-                  >
-                    Phân tích bằng AI
-                  </Button>
-                </Col>
-              </Row>
+                    options={sites.map((site) => ({
+                      label: site.siteUrl,
+                      value: site.siteUrl,
+                    }))}
+                  />
+                </Space>
+                {loading && <Spin />}
+              </Space>
             </Card>
 
-            {/* ... (Phần hiển thị kết quả giữ nguyên) ... */}
-            {loading && (
-              <div style={{ textAlign: "center", padding: 50 }}>
-                <Spin size="large" tip="Groq đang đọc data..." />
-              </div>
-            )}
-
-            {data && (
-              <Row gutter={24}>
-                <Col span={12}>
-                  <Card
-                    title="💡 AI Insights (by Groq/Llama3)"
-                    style={{ height: "100%" }}
-                  >
-                    <div style={{ maxHeight: "500px", overflowY: "auto" }}>
-                      <ReactMarkdown>{data.ai_analysis}</ReactMarkdown>
+            {/* Dashboard Data */}
+            {gscData.length > 0 && (
+              <>
+                <Card
+                  title={
+                    <Space>
+                      <RobotOutlined style={{ color: "#1890ff" }} />
+                      AI Insights
+                    </Space>
+                  }
+                  style={{ borderTop: "4px solid #1890ff" }}
+                >
+                  {insights.length > 0 ? (
+                    <ul style={{ paddingLeft: 20, margin: 0 }}>
+                      {insights.map((item, idx) => (
+                        <li key={idx} style={{ marginBottom: 8, fontSize: 16 }}>
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div style={{ textAlign: "center", padding: 20 }}>
+                      <Spin
+                        indicator={
+                          <ThunderboltFilled style={{ fontSize: 24 }} spin />
+                        }
+                      />
+                      <div style={{ marginTop: 10 }}>
+                        Analyzing SEO Strategy...
+                      </div>
                     </div>
-                  </Card>
-                </Col>
-                <Col span={12}>
-                  <Card title="📊 Top Queries" style={{ height: "100%" }}>
-                    <Table
-                      dataSource={data.raw_data}
-                      columns={columns}
-                      rowKey={(r: any) => r.keys[0]}
-                      pagination={{ pageSize: 5 }}
-                      size="small"
-                    />
-                  </Card>
-                </Col>
-              </Row>
+                  )}
+                </Card>
+
+                <Card
+                  title="Top Performing Queries"
+                  extra={<Text type="secondary">Last 30 Days</Text>}
+                >
+                  <Table
+                    dataSource={gscData}
+                    columns={columns}
+                    rowKey={(r) => r.keys[0]}
+                    pagination={{ pageSize: 5 }}
+                  />
+                </Card>
+              </>
             )}
-          </>
+          </Space>
         )}
       </Content>
     </Layout>
@@ -243,10 +326,9 @@ const SEODashboard = () => {
 };
 
 export default function App() {
-  // ... (Giữ nguyên export App)
   return (
-    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <SEODashboard />
+    <GoogleOAuthProvider clientId={process.env.REACT_APP_GOOGLE_CLIENT_ID!}>
+      <Dashboard />
     </GoogleOAuthProvider>
   );
 }
